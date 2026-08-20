@@ -4,6 +4,7 @@
 📡 Copia sinais de um canal para outro
 🔄 Placar automático + zeramento diário
 ✅ Placar aparece APENAS nos resultados
+✅ Resultado: apenas status + placar (sem ativo)
 """
 
 from telethon import TelegramClient, events
@@ -123,33 +124,6 @@ def extrair_dados_sinal(texto):
         dados['horario'] = datetime.now().strftime("%H:%M")
     return dados
 
-def extrair_ativo_resultado(texto):
-    """Extrai o ativo do resultado"""
-    # Primeiro tenta encontrar "Par:" na mensagem original
-    match = re.search(r'[Pp]ar:\s*([^\s\n]+)', texto)
-    if match:
-        return match.group(1).strip()
-    
-    # Depois tenta encontrar na mensagem
-    pares = ['EURUSD', 'GBPUSD', 'USDJPY', 'EURJPY', 'AUDUSD', 'USDCAD',
-             'GBPJPY', 'EURGBP', 'USDCHF', 'NZDUSD', 'XAUUSD', 'BTCUSD',
-             'ETHUSD', 'STA/CKS', 'STA CKS', 'SANDBOX', 'INJECTIVE',
-             'CELESTIA', 'POLKADOT', 'SOLANA', 'AVALANCHE', 'CARDANO',
-             'RIPPLE', 'LITECOIN', 'BITCOIN', 'ETHEREUM']
-    
-    # Procura por qualquer um dos pares na mensagem
-    texto_upper = texto.upper()
-    for par in pares:
-        if par in texto_upper:
-            return par
-    
-    # Tenta capturar qualquer palavra com 3+ letras maiúsculas
-    match = re.search(r'\b([A-Z]{3,})\b', texto_upper)
-    if match:
-        return match.group(1)
-    
-    return '---'
-
 def calcular_assertividade():
     """Calcula a assertividade"""
     total = stats['win'] + stats['gale1'] + stats['gale2'] + stats['loss']
@@ -178,7 +152,7 @@ def formatar_sinal_quantum(dados):
     return mensagem
 
 def formatar_resultado_quantum(texto):
-    """Formata o resultado no padrão Quantum Pro (COM PLACAR)"""
+    """Formata o resultado no padrão Quantum Pro (APENAS resultado + placar)"""
     resultado = identificar_resultado(texto)
     
     if resultado == 'win':
@@ -200,9 +174,7 @@ def formatar_resultado_quantum(texto):
     else:
         return texto
     
-    ativo = extrair_ativo_resultado(texto)
     mensagem = f"""{emoji} {status}
-📊 {ativo}
 📊 Placar: 🟢{stats['win']}W 🟡{stats['gale1']}G1 🟠{stats['gale2']}G2 🔴{stats['loss']}L
 🎯 Assertividade: {calcular_assertividade()}%"""
     return mensagem
@@ -258,7 +230,7 @@ async def processar_mensagem(event):
     if resultado:
         print(f"[{horario()}] 📊 RESULTADO identificado: {resultado.upper()}")
         mensagem_enviar = formatar_resultado_quantum(texto)
-        print(f"[{horario()}] 📤 Ativo: {extrair_ativo_resultado(texto)} | Resultado: {resultado.upper()}")
+        print(f"[{horario()}] 📤 Resultado: {resultado.upper()}")
         print(f"[{horario()}] 📊 Placar: 🟢{stats['win']}W 🟡{stats['gale1']}G1 🟠{stats['gale2']}G2 🔴{stats['loss']}L")
         try:
             await client.send_message(destino, mensagem_enviar)
