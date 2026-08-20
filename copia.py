@@ -4,7 +4,7 @@
 📡 Copia sinais de um canal para outro
 🔄 Placar automático + zeramento diário
 """
-from telethon import TelegramClient
+from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from datetime import datetime, timedelta
 import re
