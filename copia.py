@@ -1,0 +1,386 @@
+from telethon import TelegramClient, events
+from datetime import datetime, timedelta
+import re
+import asyncio
+
+# ==============================
+# CONFIGURAÇÕES
+# ==============================
+api_id = 22453120
+api_hash = "89826a4104518e9ed650cdb451ad8b53"
+
+origem = -1003965098594
+destino = -1004483690234  # Novo canal de destino
+
+client = TelegramClient("espelho", api_id, api_hash)
+
+# ==============================
+# VARIÁVEIS DE ESTATÍSTICAS
+# ==============================
+stats = {
+    'win': 0,
+    'gale1': 0,
+    'gale2': 0,
+    'loss': 0
+}
+
+# ==============================
+# PALAVRAS PARA FILTRAR (PROPAGANDAS)
+# ==============================
+PALAVRAS_BLOQUEADAS = [
+    "propaganda", "propagandas", "publi", "publicidade",
+    "patrocinado", "patrocinada", "parceria", "parceiro",
+    "grupo", "comunidade", "inscreva-se", "inscreva",
+    "curta", "compartilhe", "compartilhar", "siga",
+    "melhor grupo", "melhor canal", "oficial", "exclusivo",
+    "promocao", "promoção", "desconto", "bônus", "bonus",
+    "site", "link", "instagram", "youtube", "facebook",
+    "crie sua conta", "criar conta", "investimento",
+    "não perder a próxima oportunidade",
+    "criar sua conta de investimento",
+    "clique aqui para abrir a conta",
+    "clique aqui para criar sua conta",
+    "clique aqui e abra sua conta",
+    "abra sua conta",
+    "crie sua conta agora",
+    "clique aqui para abrir a corretora",
+    "clique aqui para criar sua conta de investimento",
+    "não perca a próxima oportunidade"
+]
+
+# ==============================
+# FUNÇÕES DE IDENTIFICAÇÃO
+# ==============================
+
+def horario():
+    return datetime.now().strftime("%H:%M:%S")
+
+def eh_propaganda(texto):
+    """
+    Verifica se a mensagem contém palavras de propaganda
+    NÃO bloqueia se for um sinal válido
+    """
+    # Se for um sinal, NÃO bloqueia
+    if eh_sinal(texto):
+        return False
+    
+    texto_lower = texto.lower()
+    for palavra in PALAVRAS_BLOQUEADAS:
+        if palavra in texto_lower:
+            return True
+    return False
+
+def eh_sinal(texto):
+    """Verifica se a mensagem é um sinal de entrada"""
+    texto_lower = texto.lower()
+    padroes = [
+        r"par:", r"direção:", r"direcao:",
+        r"horário da entrada:", r"horario da entrada:",
+        r"expiração:", r"expiracao:",
+        r"proteção", r"protecao",
+        r"compra", r"venda", r"🟢", r"🔴"
+    ]
+    match = 0
+    for padrao in padroes:
+        if re.search(padrao, texto_lower):
+            match += 1
+    # Se tiver pelo menos 3 padrões, é um sinal
+    return match >= 3
+
+def identificar_resultado(texto):
+    """
+    Identifica o tipo de resultado baseado no formato específico do canal
+    Retorna: 'win', 'gale1', 'gale2', 'loss' ou None
+    """
+    texto_lower = texto.lower()
+    
+    # LOSS: mensagem com "❎gestão!"
+    if "❎gestão" in texto or "❎ gestão" in texto:
+        return 'loss'
+    
+    # WIN GALE 2: "WIN 🔰Proteção 2 ✅"
+    if "win" in texto_lower and "proteção 2" in texto_lower and "✅" in texto:
+        return 'gale2'
+    
+    # WIN GALE 1: "WIN 🔰Proteção 1 ✅"
+    if "win" in texto_lower and "proteção 1" in texto_lower and "✅" in texto:
+        return 'gale1'
+    
+    # WIN SEM GALE: "QUEM PEGOU COLOCOU DINHEIRO NO BOLSO"
+    if "quem pegou colocou dinheiro no bolso" in texto_lower:
+        return 'win'
+    
+    # Verificação adicional para WIN (genérico)
+    if "win" in texto_lower and ("lucro" in texto_lower or "💰" in texto):
+        return 'win'
+    
+    return None
+
+def extrair_dados_sinal(texto):
+    """Extrai os dados do sinal do formato específico do canal"""
+    dados = {
+        'ativo': 'STA/CKS',
+        'direcao': 'CALL',
+        'horario': '',
+        'expiracao': 'M1',
+        'protecao1': '',
+        'protecao2': ''
+    }
+    
+    linhas = texto.split('\n')
+    for linha in linhas:
+        linha_limpa = linha.replace('*', '').replace('_', '').strip()
+        
+        # Extrai o ativo (Par:)
+        if 'par:' in linha_limpa.lower():
+            match = re.search(r'[Pp]ar:\s*([^\s\n]+)', linha_limpa)
+            if match:
+                dados['ativo'] = match.group(1).strip()
+        
+        # Extrai direção (Compra ou Venda)
+        if 'direção:' in linha_limpa.lower() or 'direcao:' in linha_limpa.lower():
+            if 'compra' in linha_limpa.lower() or '🟢' in linha_limpa:
+                dados['direcao'] = 'CALL'
+            elif 'venda' in linha_limpa.lower() or '🔴' in linha_limpa:
+                dados['direcao'] = 'PUT'
+        
+        # Extrai horário da entrada
+        if 'horário da entrada:' in linha_limpa.lower() or 'horario da entrada:' in linha_limpa.lower():
+            match = re.search(r'(\d{2}:\d{2})', linha_limpa)
+            if match:
+                dados['horario'] = match.group(1)
+        
+        # Extrai expiração
+        if 'expiração:' in linha_limpa.lower() or 'expiracao:' in linha_limpa.lower():
+            match = re.search(r'(\d+)[Mm]in', linha_limpa)
+            if match:
+                dados['expiracao'] = f"M{match.group(1)}"
+        
+        # Extrai proteções
+        if 'proteção 1º:' in linha_limpa.lower() or 'protecao 1º:' in linha_limpa.lower():
+            match = re.search(r'(\d{2}:\d{2})', linha_limpa)
+            if match:
+                dados['protecao1'] = match.group(1)
+        
+        if 'proteção 2º:' in linha_limpa.lower() or 'protecao 2º:' in linha_limpa.lower():
+            match = re.search(r'(\d{2}:\d{2})', linha_limpa)
+            if match:
+                dados['protecao2'] = match.group(1)
+    
+    # Se não encontrou horário, usa o horário atual
+    if not dados['horario']:
+        dados['horario'] = datetime.now().strftime("%H:%M")
+    
+    return dados
+
+def extrair_ativo_resultado(texto):
+    """Extrai o ativo do resultado (tenta encontrar no texto)"""
+    # Primeiro tenta encontrar "Par:" ou "Ativo:"
+    match = re.search(r'[Pp]ar:\s*([^\s\n]+)', texto)
+    if match:
+        return match.group(1).strip()
+    
+    # Depois tenta encontrar na mensagem
+    pares = ['EURUSD', 'GBPUSD', 'USDJPY', 'EURJPY', 'AUDUSD', 'USDCAD', 
+             'GBPJPY', 'EURGBP', 'USDCHF', 'NZDUSD', 'XAUUSD', 'BTCUSD', 
+             'ETHUSD', 'STA/CKS', 'STA CKS', 'SANDBOX', 'INJECTIVE']
+    
+    for par in pares:
+        if par in texto.upper():
+            return par
+    
+    return '---'
+
+def calcular_assertividade():
+    """Calcula a assertividade com base nas estatísticas"""
+    total = stats['win'] + stats['gale1'] + stats['gale2'] + stats['loss']
+    if total == 0:
+        return 0.0
+    return round(((stats['win'] + stats['gale1'] + stats['gale2']) / total) * 100, 1)
+
+def formatar_sinal_quantum(dados):
+    """Formata o sinal no padrão Quantum Pro"""
+    emoji_direcao = '🟢' if dados['direcao'] == 'CALL' else '🔴'
+    
+    protecoes = ""
+    if dados['protecao1']:
+        protecoes = f"\n🛡️ Proteção 1: {dados['protecao1']}"
+    if dados['protecao2']:
+        protecoes += f"\n🛡️ Proteção 2: {dados['protecao2']}"
+    
+    mensagem = f"""⚛️ SINAL QUANTUM PRO ⚛️
+
+⏰ Horário: {dados['horario']}
+💰 Ativo: {dados['ativo']}
+📈 Direção: {dados['direcao']} {emoji_direcao}
+⌛️ Expiração: {dados['expiracao']}{protecoes}
+
+⚠️ Entrar somente no horário marcado.
+🔄 2 recuperação (Gale 2)!
+
+📊 Placar atual: 🟢{stats['win']}W 🟡{stats['gale1']}G1 🟠{stats['gale2']}G2 🔴{stats['loss']}L
+🎯 Assertividade: {calcular_assertividade()}%"""
+    
+    return mensagem
+
+def formatar_resultado_quantum(texto):
+    """Formata o resultado no padrão Quantum Pro"""
+    resultado = identificar_resultado(texto)
+    
+    if resultado == 'win':
+        stats['win'] += 1
+        emoji = '✅'
+        status = 'WIN'
+    elif resultado == 'gale1':
+        stats['gale1'] += 1
+        emoji = '✅'
+        status = 'WIN (Gale 1)'
+    elif resultado == 'gale2':
+        stats['gale2'] += 1
+        emoji = '✅'
+        status = 'WIN (Gale 2)'
+    elif resultado == 'loss':
+        stats['loss'] += 1
+        emoji = '❌'
+        status = 'LOSS'
+    else:
+        # Se não identificou resultado, retorna a mensagem original
+        return texto
+    
+    ativo = extrair_ativo_resultado(texto)
+    
+    mensagem = f"""{emoji} {status}
+📊 {ativo}
+📊 Placar: 🟢{stats['win']}W 🟡{stats['gale1']}G1 🟠{stats['gale2']}G2 🔴{stats['loss']}L
+🎯 Assertividade: {calcular_assertividade()}%"""
+    
+    return mensagem
+
+# ==============================
+# FUNÇÃO PARA ZERAR PLACAR
+# ==============================
+
+async def zerar_placar():
+    """Zera as estatísticas e envia mensagem de aviso"""
+    global stats
+    stats = {
+        'win': 0,
+        'gale1': 0,
+        'gale2': 0,
+        'loss': 0
+    }
+    print(f"[{horario()}] 🔄 PLACAR ZERADO - NOVO DIA!")
+    
+    try:
+        mensagem = """🔄 PLACAR ZERADO - NOVO DIA!
+📊 Estatísticas reiniciadas à meia-noite.
+
+⚛️ QUANTUM PRO PRONTO PARA OPERAR! ⚛️"""
+        await client.send_message(destino, mensagem)
+        print(f"[{horario()}] ✅ Mensagem de zeramento enviada!")
+    except Exception as e:
+        print(f"[{horario()}] ❌ Erro ao enviar mensagem de zeramento: {e}")
+
+async def agendar_zeramento():
+    """Agenda o zeramento do placar para meia-noite"""
+    while True:
+        agora = datetime.now()
+        meia_noite = agora.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        tempo_ate_meia_noite = (meia_noite - agora).total_seconds()
+        
+        await asyncio.sleep(tempo_ate_meia_noite)
+        await zerar_placar()
+
+# ==============================
+# INICIALIZAÇÃO
+# ==============================
+print("=" * 50)
+print("     ⚛️ ESPELHO QUANTUM PRO ⚛️")
+print("=" * 50)
+
+client.start()
+print("✅ Conectado ao Telegram")
+print(f"📡 Origem: {origem}")
+print(f"📡 Destino: {destino}")
+print("⏳ Aguardando novas mensagens...")
+print("=" * 50)
+
+# Inicia a tarefa de zeramento
+loop = asyncio.get_event_loop()
+loop.create_task(agendar_zeramento())
+
+# ==============================
+# EVENTO PRINCIPAL
+# ==============================
+@client.on(events.NewMessage(chats=origem))
+async def processar_mensagem(event):
+    texto = event.message.text
+    if not texto:
+        return
+    
+    print(f"[{horario()}] 🔔 Nova mensagem detectada!")
+    
+    # Verifica se é um sinal (ANTES de bloquear propaganda)
+    if eh_sinal(texto):
+        print(f"[{horario()}] 📊 Sinal identificado!")
+        dados = extrair_dados_sinal(texto)
+        mensagem_enviar = formatar_sinal_quantum(dados)
+        
+        print(f"[{horario()}] 📤 Enviando sinal formatado...")
+        
+        try:
+            await client.send_message(destino, mensagem_enviar)
+            print(f"[{horario()}] ✅ Mensagem enviada com sucesso!")
+        except Exception as erro:
+            print(f"[{horario()}] ❌ Erro ao enviar mensagem:")
+            print(f"   {erro}")
+        
+        print(f"[{horario()}] 🔄 Continuando monitoramento...")
+        print("=" * 40)
+        return
+    
+    # Verifica se é um resultado
+    resultado = identificar_resultado(texto)
+    if resultado:
+        print(f"[{horario()}] 📊 Resultado identificado: {resultado.upper()}")
+        mensagem_enviar = formatar_resultado_quantum(texto)
+        
+        print(f"[{horario()}] 📤 Enviando resultado formatado...")
+        
+        try:
+            await client.send_message(destino, mensagem_enviar)
+            print(f"[{horario()}] ✅ Mensagem enviada com sucesso!")
+        except Exception as erro:
+            print(f"[{horario()}] ❌ Erro ao enviar mensagem:")
+            print(f"   {erro}")
+        
+        print(f"[{horario()}] 🔄 Continuando monitoramento...")
+        print("=" * 40)
+        return
+    
+    # Se não é sinal nem resultado, verifica se é propaganda
+    if eh_propaganda(texto):
+        print(f"[{horario()}] 🚫 Propaganda bloqueada!")
+        print(f"   Motivo: contém palavra proibida")
+        return
+    
+    print(f"[{horario()}] 📝 Mensagem ignorada (não é sinal, resultado ou propaganda)")
+    print("=" * 40)
+
+# ==============================
+# EXECUÇÃO
+# ==============================
+try:
+    client.run_until_disconnected()
+except KeyboardInterrupt:
+    print("\n" + "=" * 50)
+    print("📊 RESUMO FINAL")
+    print("=" * 50)
+    print(f"✅ WIN (sem gale): {stats['win']}")
+    print(f"🟡 GALE 1:         {stats['gale1']}")
+    print(f"🟠 GALE 2:         {stats['gale2']}")
+    print(f"❌ LOSS:           {stats['loss']}")
+    print(f"📊 Total:          {stats['win'] + stats['gale1'] + stats['gale2'] + stats['loss']}")
+    print(f"🎯 Assertividade:  {calcular_assertividade()}%")
+    print("=" * 50)
+    print("👋 Bot encerrado!")
