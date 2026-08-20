@@ -3,7 +3,7 @@
 ⚛️ ESPELHO QUANTUM PRO - TELEGRAM
 📡 Copia sinais de um canal para outro
 🔄 Placar automático + zeramento diário
-✅ NUNCA bloqueia sinais (mesmo com propaganda)
+✅ Placar aparece APENAS nos resultados
 """
 
 from telethon import TelegramClient, events
@@ -125,15 +125,29 @@ def extrair_dados_sinal(texto):
 
 def extrair_ativo_resultado(texto):
     """Extrai o ativo do resultado"""
+    # Primeiro tenta encontrar "Par:" na mensagem original
     match = re.search(r'[Pp]ar:\s*([^\s\n]+)', texto)
     if match:
         return match.group(1).strip()
+    
+    # Depois tenta encontrar na mensagem
     pares = ['EURUSD', 'GBPUSD', 'USDJPY', 'EURJPY', 'AUDUSD', 'USDCAD',
              'GBPJPY', 'EURGBP', 'USDCHF', 'NZDUSD', 'XAUUSD', 'BTCUSD',
-             'ETHUSD', 'STA/CKS', 'STA CKS', 'SANDBOX', 'INJECTIVE']
+             'ETHUSD', 'STA/CKS', 'STA CKS', 'SANDBOX', 'INJECTIVE',
+             'CELESTIA', 'POLKADOT', 'SOLANA', 'AVALANCHE', 'CARDANO',
+             'RIPPLE', 'LITECOIN', 'BITCOIN', 'ETHEREUM']
+    
+    # Procura por qualquer um dos pares na mensagem
+    texto_upper = texto.upper()
     for par in pares:
-        if par in texto.upper():
+        if par in texto_upper:
             return par
+    
+    # Tenta capturar qualquer palavra com 3+ letras maiúsculas
+    match = re.search(r'\b([A-Z]{3,})\b', texto_upper)
+    if match:
+        return match.group(1)
+    
     return '---'
 
 def calcular_assertividade():
@@ -144,7 +158,7 @@ def calcular_assertividade():
     return round(((stats['win'] + stats['gale1'] + stats['gale2']) / total) * 100, 1)
 
 def formatar_sinal_quantum(dados):
-    """Formata o sinal no padrão Quantum Pro"""
+    """Formata o sinal no padrão Quantum Pro (SEM PLACAR)"""
     emoji_direcao = '🟢' if dados['direcao'] == 'CALL' else '🔴'
     protecoes = ""
     if dados['protecao1']:
@@ -160,14 +174,11 @@ def formatar_sinal_quantum(dados):
 ⌛️ Expiração: {dados['expiracao']}{protecoes}
 
 ⚠️ Entrar somente no horário marcado.
-🔄 2 recuperação (Gale 2)!
-
-📊 Placar atual: 🟢{stats['win']}W 🟡{stats['gale1']}G1 🟠{stats['gale2']}G2 🔴{stats['loss']}L
-🎯 Assertividade: {calcular_assertividade()}%"""
+🔄 2 recuperação (Gale 2)!"""
     return mensagem
 
 def formatar_resultado_quantum(texto):
-    """Formata o resultado no padrão Quantum Pro"""
+    """Formata o resultado no padrão Quantum Pro (COM PLACAR)"""
     resultado = identificar_resultado(texto)
     
     if resultado == 'win':
@@ -248,6 +259,7 @@ async def processar_mensagem(event):
         print(f"[{horario()}] 📊 RESULTADO identificado: {resultado.upper()}")
         mensagem_enviar = formatar_resultado_quantum(texto)
         print(f"[{horario()}] 📤 Ativo: {extrair_ativo_resultado(texto)} | Resultado: {resultado.upper()}")
+        print(f"[{horario()}] 📊 Placar: 🟢{stats['win']}W 🟡{stats['gale1']}G1 🟠{stats['gale2']}G2 🔴{stats['loss']}L")
         try:
             await client.send_message(destino, mensagem_enviar)
             print(f"[{horario()}] ✅ Mensagem enviada com sucesso!")
