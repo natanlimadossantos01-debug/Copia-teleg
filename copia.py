@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
-⚛️ ESPELHO QUANTUM PRO - TELEGRAM
+⚛️ ESPELHO QUANTUM PRO - RAILWAY
 📡 Copia sinais de um canal para outro
 🔄 Placar automático + zeramento diário
-✅ Placar aparece APENAS nos resultados
-✅ Resultado: apenas status + placar (sem ativo)
+✅ Com KEEP-ALIVE e AUTO-REINÍCIO
 """
 
 from telethon import TelegramClient, events
@@ -12,6 +11,8 @@ from telethon.sessions import StringSession
 from datetime import datetime, timedelta
 import re
 import asyncio
+import sys
+import time
 
 # ==============================
 # CONFIGURAÇÕES
@@ -24,8 +25,6 @@ SESSAO_STRING = "1AZWarzwBu7qTbV-h6_Xb7VoLwNt92OWiEq9HJH_3RW3RZbo4t7tQCJ48vt5HFd
 
 origem = -1003965098594
 destino = -1004483690234
-
-client = TelegramClient(StringSession(SESSAO_STRING), api_id, api_hash)
 
 # ==============================
 # VARIÁVEIS DE ESTATÍSTICAS
@@ -203,6 +202,44 @@ async def agendar_zeramento():
         await asyncio.sleep(tempo_ate_meia_noite)
         await zerar_placar()
 
+# ==============================
+# KEEP-ALIVE - Mantém o bot vivo no Railway
+# ==============================
+async def keep_alive():
+    """Envia um ping a cada 5 minutos para manter a conexão ativa"""
+    while True:
+        await asyncio.sleep(300)  # 5 minutos
+        print(f"[{horario()}] 💓 Keep-Alive: bot ativo")
+        try:
+            # Tenta enviar uma mensagem de teste para si mesmo (opcional)
+            # await client.send_message(destino, "💓 Keep-Alive")
+            pass
+        except Exception as e:
+            print(f"[{horario()}] ⚠️ Keep-Alive falhou: {e}")
+
+# ==============================
+# RECONEXÃO AUTOMÁTICA
+# ==============================
+async def reconectar():
+    """Tenta reconectar se a conexão cair"""
+    while True:
+        await asyncio.sleep(60)  # Verifica a cada minuto
+        try:
+            # Tenta obter o horário do servidor para verificar conexão
+            await client.get_me()
+        except Exception as e:
+            print(f"[{horario()}] ⚠️ Conexão perdida: {e}")
+            print(f"[{horario()}] 🔄 Tentando reconectar...")
+            try:
+                await client.disconnect()
+                await client.start()
+                print(f"[{horario()}] ✅ Reconectado com sucesso!")
+            except Exception as reconect_error:
+                print(f"[{horario()}] ❌ Falha ao reconectar: {reconect_error}")
+
+# ==============================
+# EVENTO PRINCIPAL
+# ==============================
 @client.on(events.NewMessage(chats=origem))
 async def processar_mensagem(event):
     texto = event.message.text
@@ -244,11 +281,15 @@ async def processar_mensagem(event):
     print(f"[{horario()}] 📝 Mensagem ignorada (não é sinal nem resultado)")
     print("=" * 40)
 
+# ==============================
+# MAIN COM KEEP-ALIVE
+# ==============================
 async def main():
     print("=" * 50)
-    print("     ⚛️ ESPELHO QUANTUM PRO ⚛️")
+    print("     ⚛️ ESPELHO QUANTUM PRO - RAILWAY")
     print("=" * 50)
     
+    # Inicia o cliente
     await client.start()
     print("✅ Conectado ao Telegram")
     print(f"📡 Origem: {origem}")
@@ -256,23 +297,36 @@ async def main():
     print("⏳ Aguardando novas mensagens...")
     print("=" * 50)
     
-    # Inicia a tarefa de zeramento
+    # Inicia as tarefas em segundo plano
     asyncio.create_task(agendar_zeramento())
+    asyncio.create_task(keep_alive())
+    asyncio.create_task(reconectar())
     
+    # Mantém o bot rodando
     await client.run_until_disconnected()
 
+# ==============================
+# EXECUÇÃO COM AUTO-REINÍCIO
+# ==============================
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\n" + "=" * 50)
-        print("📊 RESUMO FINAL")
-        print("=" * 50)
-        print(f"✅ WIN (sem gale): {stats['win']}")
-        print(f"🟡 GALE 1:         {stats['gale1']}")
-        print(f"🟠 GALE 2:         {stats['gale2']}")
-        print(f"❌ LOSS:           {stats['loss']}")
-        print(f"📊 Total:          {stats['win'] + stats['gale1'] + stats['gale2'] + stats['loss']}")
-        print(f"🎯 Assertividade:  {calcular_assertividade()}%")
-        print("=" * 50)
-        print("👋 Bot encerrado!")
+    while True:
+        try:
+            asyncio.run(main())
+        except KeyboardInterrupt:
+            print("\n" + "=" * 50)
+            print("📊 RESUMO FINAL")
+            print("=" * 50)
+            print(f"✅ WIN (sem gale): {stats['win']}")
+            print(f"🟡 GALE 1:         {stats['gale1']}")
+            print(f"🟠 GALE 2:         {stats['gale2']}")
+            print(f"❌ LOSS:           {stats['loss']}")
+            print(f"📊 Total:          {stats['win'] + stats['gale1'] + stats['gale2'] + stats['loss']}")
+            print(f"🎯 Assertividade:  {calcular_assertividade()}%")
+            print("=" * 50)
+            print("👋 Bot encerrado!")
+            break
+        except Exception as e:
+            print(f"\n❌ ERRO FATAL: {e}")
+            print("🔄 Reiniciando o bot em 10 segundos...")
+            time.sleep(10)
+            continue
