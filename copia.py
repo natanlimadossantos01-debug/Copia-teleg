@@ -12,18 +12,24 @@ from telethon.sessions import StringSession
 from datetime import datetime, timedelta
 import re
 import asyncio
+import os
 
 # ==============================
 # CONFIGURAÇÕES
 # ==============================
-api_id = 22453120
-api_hash = "89826a4104518e9ed650cdb451ad8b53"
+api_id = int(os.environ.get('API_ID', '22453120'))
+api_hash = os.environ.get('API_HASH', '89826a4104518e9ed650cdb451ad8b53')
 
-# String de sessão (autenticação sem interação)
-SESSAO_STRING = "1AZWarzwBu7qTbV-h6_Xb7VoLwNt92OWiEq9HJH_3RW3RZbo4t7tQCJ48vt5HFdxwDh1tyrtpF7VMqnDLRRIz7Xt5g2rnyQWqZT2_H56BBHaaZITU39xJN3-bCLocsXDCs91TA8uzsvSV5U8QyRlIc5IaUcUuejXRdL5YyZJj3FPq9ojGyokhmgsnnH2D6LH_P03sucoAuCm4vOOEuvwxtX7E4iYSd62pcr5fADuxzErkJZ4uQHKTXZs0I9ytba43MSL27FUOfu7vRCfdFbBAZyHhdlGtSrgZ3TxtsDQERFbz8z46RJMVzq948QtWRIowyhNU9glZk5VUoUV5-VTUu6ZO2c_uebI="
+# String de sessão via variável de ambiente
+SESSAO_STRING = os.environ.get('SESSAO_STRING', '')
 
-origem = -1001824915491
-destino = -1004483690234
+origem = int(os.environ.get('CANAL_ORIGEM', '-1001824915491'))
+destino = int(os.environ.get('CANAL_DESTINO', '-1004483690234'))
+
+if not SESSAO_STRING:
+    print("❌ ERRO: Variável SESSAO_STRING não definida!")
+    print("   Configure a string de sessão no Railway.")
+    sys.exit(1)
 
 client = TelegramClient(StringSession(SESSAO_STRING), api_id, api_hash)
 
