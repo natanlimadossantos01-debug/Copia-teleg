@@ -2,8 +2,9 @@
 """
 ⚛️ ESPELHO QUANTUM PRO - TELEGRAM
 📡 Copia sinais + lê resultados por OCR (fotos sem legenda)
-✅ Usa horário da mensagem como fallback quando OCR falha
-✅ Opção D: WIN NA PROTEÇÃO conta como WIN geral
+✅ Opção D: WIN e WIN NA PROTEÇÃO contam como WIN geral
+✅ Fallback por horário quando OCR falha
+✅ Envia APENAS o texto do resultado + placar
 """
 
 from telethon import TelegramClient, events
@@ -23,17 +24,18 @@ api_id = int(os.environ.get('API_ID', '22453120'))
 api_hash = os.environ.get('API_HASH', '89826a4104518e9ed650cdb451ad8b53')
 SESSAO_STRING = os.environ.get('SESSAO_STRING', '')
 
-origem = int(os.environ.get('CANAL_ORIGEM', '-1001824915491'))
+origem = int(os.environ.get('CANAL_ORIGEM', '-1001245695047'))
 destino = int(os.environ.get('CANAL_DESTINO', '-1004483690234'))
 
 if not SESSAO_STRING:
     print("❌ ERRO: Variável SESSAO_STRING não definida!")
+    print("   Configure a string de sessão no Railway.")
     sys.exit(1)
 
 client = TelegramClient(StringSession(SESSAO_STRING), api_id, api_hash)
 
 # ==============================
-# OCR
+# OCR (easyocr)
 # ==============================
 try:
     import easyocr
@@ -52,9 +54,9 @@ except Exception as e:
 # ==============================
 stats = {'win': 0, 'loss': 0}
 
-# Guarda o horário do último sinal enviado, pra estimar o resultado
-ultimo_sinal_horario = None  # datetime
-ultimo_sinal_expiracao_min = 1  # M1 por padrão
+# Controle pra fallback por horário
+ultimo_sinal_horario = None      # datetime do último sinal
+ultimo_sinal_expiracao_min = 1   # expiração em minutos (M1 = 1)
 
 # ==============================
 # FUNÇÕES
@@ -68,6 +70,7 @@ def obter_texto(event):
     return msg.message or msg.text or ""
 
 def normalizar(txt):
+    """Remove acentos, deixa maiúsculo, corrige confusões comuns do OCR."""
     txt = txt.upper()
     txt = unicodedata.normalize('NFKD', txt)
     txt = ''.join(c for c in txt if not unicodedata.combining(c))
@@ -152,25 +155,17 @@ def classificar_ocr(texto_ocr):
 
 def estimar_por_horario():
     """
-    Fallback: se o OCR falhou, estima o resultado pelo tempo
-    desde o último sinal enviado.
-    Regra (M1):
-      - até 2 min  -> win (sem gale ou na proteção — opção D conta tudo como win)
-      - mais de 2 min -> loss
+    Fallback: se o OCR falhou, estima pelo tempo desde o último sinal.
+    Regra (M1): até 2 velas -> win | mais que isso -> loss
     """
     global ultimo_sinal_horario, ultimo_sinal_expiracao_min
-
     if ultimo_sinal_horario is None:
         return None
-
     delta = (datetime.now() - ultimo_sinal_horario).total_seconds() / 60
-    limite = ultimo_sinal_expiracao_min * 2  # 2 velas
+    limite = ultimo_sinal_expiracao_min * 2
+    return 'win' if delta <= limite else 'loss'
 
-    if delta <= limite:
-        return 'win'
-    return 'loss'
-
-def formatar_resultado_quantum(resultado, origem_deteccao=""):
+def formatar_resultado_quantum(resultado, via=""):
     if resultado == 'win':
         stats['win'] += 1
         emoji, status = '✅', 'WIN'
@@ -180,7 +175,7 @@ def formatar_resultado_quantum(resultado, origem_deteccao=""):
     else:
         return None
 
-    sufixo = f" _(via {origem_deteccao})_" if origem_deteccao else ""
+    sufixo = f" _(via {via})_" if via else ""
 
     return f"""{emoji} {status}{sufixo}
 📊 Placar: 🟢{stats['win']}W 🔴{stats['loss']}L
@@ -220,7 +215,6 @@ async def processar_mensagem(event):
         dados = extrair_dados_sinal(texto)
         msg = formatar_sinal_quantum(dados)
 
-        # Guarda o horário do sinal pra estimar resultado depois
         ultimo_sinal_horario = datetime.now()
         m = re.search(r'M(\d+)', dados['expiracao'])
         ultimo_sinal_expiracao_min = int(m.group(1)) if m else 1
@@ -239,24 +233,20 @@ async def processar_mensagem(event):
         resultado = None
         via = ""
 
-        # 1) Tenta OCR
         if OCR_OK:
             print(f"[{horario()}] 🖼️ Foto — rodando OCR...")
             try:
                 img_bytes = await event.message.download_media(file=bytes)
                 img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
                 arr = np.array(img)
-
                 resultado_ocr = _reader.readtext(arr, detail=0, paragraph=True)
                 texto_ocr = " ".join(resultado_ocr)
                 print(f"[{horario()}] 🔎 OCR bruto: {texto_ocr[:200]}")
-
                 resultado = classificar_ocr(texto_ocr)
                 via = "OCR"
             except Exception as e:
                 print(f"[{horario()}] ❌ Erro OCR: {e}")
 
-        # 2) Fallback: horário
         if resultado is None:
             resultado = estimar_por_horario()
             via = "horário"
