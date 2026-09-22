@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-⚛️ ESPELHO QUANTUM PRO - TELEGRAM
+⚛️ ESPELHO TRADER MAGO - TELEGRAM
 📡 Copia sinais + classifica resultado pelo TEMPO desde o sinal
 ✅ Opção D: WIN e WIN NA PROTEÇÃO contam como WIN geral
 ✅ Zeramento automático à meia-noite (horário de Brasília)
 ❌ SEM OCR — classificação 100% por tempo
+❌ SEM campo Suporte no sinal enviado
 """
 
 # ==============================
@@ -72,21 +73,18 @@ def normalizar(txt):
     return txt
 
 def eh_sinal(texto):
+    """Versão simplificada — só exige 'ativo:' e 'horário:'/'horario:'."""
     t = texto.lower()
-    return (
-        'ativo:' in t and
-        ('horário:' in t or 'horario:' in t) and
-        ('expiração:' in t or 'expiracao:' in t) and
-        ('direção:' in t or 'direcao:' in t)
-    )
+    tem_ativo = 'ativo:' in t
+    tem_horario = 'horário:' in t or 'horario:' in t
+    return tem_ativo and tem_horario
 
 def extrair_dados_sinal(texto):
     dados = {
         'ativo': 'EUR/JPY (OTC)',
         'direcao': 'CALL',
         'horario': '',
-        'expiracao': 'M1',
-        'suporte': ''
+        'expiracao': 'M1'
     }
     m = re.search(r'Ativo:\s*([^\n]+)', texto, re.IGNORECASE)
     if m: dados['ativo'] = m.group(1).strip()
@@ -103,8 +101,6 @@ def extrair_dados_sinal(texto):
             dados['direcao'] = 'PUT'
         else:
             dados['direcao'] = d
-    m = re.search(r'Suporte:\s*([^\n]+)', texto, re.IGNORECASE)
-    if m: dados['suporte'] = m.group(1).strip()
     if not dados['horario']:
         dados['horario'] = datetime.now().strftime("%H:%M")
     return dados
@@ -116,8 +112,8 @@ def calcular_assertividade():
     return round((stats['win'] / total) * 100, 1)
 
 def formatar_sinal_quantum(dados):
+    """SEM campo Suporte."""
     emoji_direcao = '🟢' if dados['direcao'] == 'CALL' else '🔴'
-    suporte_linha = f"\n🥇 Suporte: {dados['suporte']}" if dados['suporte'] else ""
     return f"""⚛️ SINAL TRADER MAGO ⚛️
 
 ⏰ Horário: {dados['horario']}
@@ -126,14 +122,12 @@ def formatar_sinal_quantum(dados):
 ⏳ Expiração: {dados['expiracao']}
 
 ⚠️ Entrar somente no horário marcado.
-🔄 1 recuperação (Gale 1)!"""
+🔄 2 recuperação (Gale 2)!"""
 
 def classificar_por_tempo():
     """
     Classifica o resultado pelo tempo desde o último sinal.
-    Regra (M1):
-      <= 2 velas  -> WIN
-      >  3 velas  -> LOSS
+    Regra (M1): <= 2 velas -> WIN | > 2 velas -> LOSS
     Retorna (resultado, minutos_decorridos)
     """
     global ultimo_sinal_horario, ultimo_sinal_expiracao_min
@@ -147,7 +141,7 @@ def classificar_por_tempo():
     resultado = 'win' if delta_min <= limite else 'loss'
     return resultado, delta_min
 
-def formatar_resultado_quantum:
+def formatar_resultado_quantum(resultado, minutos=None):
     if resultado == 'win':
         stats['win'] += 1
         emoji, status = '✅', 'WIN'
@@ -171,7 +165,7 @@ async def zerar_placar():
         msg = """🔄 PLACAR ZERADO - NOVO DIA!
 📊 Estatísticas reiniciadas à meia-noite.
 
-⚛️ QUANTUM PRO PRONTO PARA OPERAR! ⚛️"""
+⚛️ TRADER MAGO PRONTO PARA OPERAR! ⚛️"""
         await client.send_message(destino, msg)
         print(f"[{horario()}] ✅ Mensagem de zeramento enviada!")
     except Exception as e:
@@ -199,8 +193,9 @@ async def processar_mensagem(event):
     tem_foto = event.message.photo is not None
 
     print(f"[{horario()}] 🔔 Nova mensagem (foto={tem_foto})")
+    print(f"[{horario()}] 📝 Texto: {repr(texto[:200])}")
 
-    # ---- SINAL (texto) ----
+    # ---- PRIMEIRO: verifica se é SINAL (com ou sem foto) ----
     if texto and eh_sinal(texto):
         dados = extrair_dados_sinal(texto)
         msg = formatar_sinal_quantum(dados)
@@ -218,7 +213,7 @@ async def processar_mensagem(event):
         print("=" * 40)
         return
 
-    # ---- FOTO DE RESULTADO (só por tempo) ----
+    # ---- DEPOIS: se for foto SEM sinal, trata como resultado ----
     if tem_foto:
         resultado, minutos = classificar_por_tempo()
         if resultado:
@@ -228,13 +223,13 @@ async def processar_mensagem(event):
                 print(f"[{horario()}] ✅ Resultado: {resultado.upper()} (em {minutos:.1f} min)")
                 print(f"[{horario()}] 📊 Placar: 🟢{stats['win']}W 🔴{stats['loss']}L")
             except Exception as e:
-                print(f"[{horario()}] ❌ Erro ao enviar: {e}")
+                print(f"[{horario()}] ❌ Erro: {e}")
         else:
-            print(f"[{horario()}] ⚠️ Sem sinal anterior — ignorando foto")
+            print(f"[{horario()}] ⚠️ Sem sinal anterior — ignorando")
         print("=" * 40)
         return
 
-    # ---- RESULTADO POR TEXTO (fallback) ----
+    # ---- RESULTADO POR TEXTO ----
     if texto:
         t = normalizar(texto)
         if 'LOSS' in t or '❎' in texto:
@@ -257,7 +252,7 @@ async def processar_mensagem(event):
 
 async def main():
     print("=" * 50)
-    print("     ⚛️ ESPELHO QUANTUM PRO ⚛️")
+    print("     ⚛️ ESPELHO TRADER MAGO ⚛️")
     print("=" * 50)
     print(f"🕐 Fuso horário: {time.tzname}")
     print(f"🕐 Agora: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')} (Brasília)")
