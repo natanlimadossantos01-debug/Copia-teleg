@@ -118,22 +118,22 @@ def calcular_assertividade():
 def formatar_sinal_quantum(dados):
     emoji_direcao = '🟢' if dados['direcao'] == 'CALL' else '🔴'
     suporte_linha = f"\n🥇 Suporte: {dados['suporte']}" if dados['suporte'] else ""
-    return f"""⚛️ SINAL QUANTUM PRO ⚛️
+    return f"""⚛️ SINAL TRADER MAGO ⚛️
 
 ⏰ Horário: {dados['horario']}
 💵 Ativo: {dados['ativo']}
 📉 Direção: {dados['direcao']} {emoji_direcao}
-⏳ Expiração: {dados['expiracao']}{suporte_linha}
+⏳ Expiração: {dados['expiracao']}
 
 ⚠️ Entrar somente no horário marcado.
-🔄 2 recuperação (Gale 2)!"""
+🔄 1 recuperação (Gale 1)!"""
 
 def classificar_por_tempo():
     """
     Classifica o resultado pelo tempo desde o último sinal.
     Regra (M1):
       <= 2 velas  -> WIN
-      >  2 velas  -> LOSS
+      >  3 velas  -> LOSS
     Retorna (resultado, minutos_decorridos)
     """
     global ultimo_sinal_horario, ultimo_sinal_expiracao_min
@@ -147,7 +147,7 @@ def classificar_por_tempo():
     resultado = 'win' if delta_min <= limite else 'loss'
     return resultado, delta_min
 
-def formatar_resultado_quantum(resultado, minutos=None):
+def formatar_resultado_quantum:
     if resultado == 'win':
         stats['win'] += 1
         emoji, status = '✅', 'WIN'
