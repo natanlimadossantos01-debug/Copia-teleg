@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 ⚛️ ESPELHO QUANTUM PRO - TELEGRAM
-📡 Copia sinais de um canal para outro
-🔄 Placar automático + zeramento diário
-✅ Adaptado para o formato: Ativo / Horário / Expiração / Direção / Suporte
+📡 Copia sinais + lê resultados por OCR (fotos sem legenda)
+✅ Usa horário da mensagem como fallback quando OCR falha
+✅ Opção D: WIN NA PROTEÇÃO conta como WIN geral
 """
 
 from telethon import TelegramClient, events
@@ -13,13 +13,14 @@ import re
 import asyncio
 import os
 import sys
+import io
+import unicodedata
 
 # ==============================
 # CONFIGURAÇÕES
 # ==============================
 api_id = int(os.environ.get('API_ID', '22453120'))
 api_hash = os.environ.get('API_HASH', '89826a4104518e9ed650cdb451ad8b53')
-
 SESSAO_STRING = os.environ.get('SESSAO_STRING', '')
 
 origem = int(os.environ.get('CANAL_ORIGEM', '-1001824915491'))
@@ -32,9 +33,28 @@ if not SESSAO_STRING:
 client = TelegramClient(StringSession(SESSAO_STRING), api_id, api_hash)
 
 # ==============================
+# OCR
+# ==============================
+try:
+    import easyocr
+    import numpy as np
+    from PIL import Image
+    print("⏳ Carregando OCR (pode demorar na 1ª vez)...")
+    _reader = easyocr.Reader(['pt', 'en'], gpu=False, verbose=False)
+    OCR_OK = True
+    print("✅ OCR carregado")
+except Exception as e:
+    print(f"⚠️ OCR indisponível: {e}")
+    OCR_OK = False
+
+# ==============================
 # ESTATÍSTICAS
 # ==============================
-stats = {'win': 0, 'gale1': 0, 'gale2': 0, 'loss': 0}
+stats = {'win': 0, 'loss': 0}
+
+# Guarda o horário do último sinal enviado, pra estimar o resultado
+ultimo_sinal_horario = None  # datetime
+ultimo_sinal_expiracao_min = 1  # M1 por padrão
 
 # ==============================
 # FUNÇÕES
@@ -43,31 +63,29 @@ stats = {'win': 0, 'gale1': 0, 'gale2': 0, 'loss': 0}
 def horario():
     return datetime.now().strftime("%H:%M:%S")
 
-def eh_sinal(texto):
-    """Detecta o formato novo: Ativo / Horário / Expiração / Direção"""
-    texto_lower = texto.lower()
-    tem_ativo = 'ativo:' in texto_lower
-    tem_horario = 'horário:' in texto_lower or 'horario:' in texto_lower
-    tem_expiracao = 'expiração:' in texto_lower or 'expiracao:' in texto_lower
-    tem_direcao = 'direção:' in texto_lower or 'direcao:' in texto_lower
-    return tem_ativo and tem_horario and tem_expiracao and tem_direcao
+def obter_texto(event):
+    msg = event.message
+    return msg.message or msg.text or ""
 
-def identificar_resultado(texto):
-    texto_lower = texto.lower()
-    if "❎gestão" in texto or "❎ gestão" in texto:
-        return 'loss'
-    if "win" in texto_lower and "proteção 2" in texto_lower and "✅" in texto:
-        return 'gale2'
-    if "win" in texto_lower and "proteção 1" in texto_lower and "✅" in texto:
-        return 'gale1'
-    if "quem pegou colocou dinheiro no bolso" in texto_lower:
-        return 'win'
-    if "win" in texto_lower and ("lucro" in texto_lower or "💰" in texto):
-        return 'win'
-    return None
+def normalizar(txt):
+    txt = txt.upper()
+    txt = unicodedata.normalize('NFKD', txt)
+    txt = ''.join(c for c in txt if not unicodedata.combining(c))
+    txt = txt.replace('0', 'O').replace('1', 'I').replace('5', 'S')
+    txt = re.sub(r'[^A-Z ]+', ' ', txt)
+    txt = re.sub(r'\s+', ' ', txt).strip()
+    return txt
+
+def eh_sinal(texto):
+    t = texto.lower()
+    return (
+        'ativo:' in t and
+        ('horário:' in t or 'horario:' in t) and
+        ('expiração:' in t or 'expiracao:' in t) and
+        ('direção:' in t or 'direcao:' in t)
+    )
 
 def extrair_dados_sinal(texto):
-    """Extrai dados do formato novo"""
     dados = {
         'ativo': 'EUR/JPY (OTC)',
         'direcao': 'CALL',
@@ -75,54 +93,37 @@ def extrair_dados_sinal(texto):
         'expiracao': 'M1',
         'suporte': ''
     }
-
-    # Ativo
     m = re.search(r'Ativo:\s*([^\n]+)', texto, re.IGNORECASE)
-    if m:
-        dados['ativo'] = m.group(1).strip()
-
-    # Horário
+    if m: dados['ativo'] = m.group(1).strip()
     m = re.search(r'Hor[áa]rio:\s*(\d{1,2}:\d{2})', texto, re.IGNORECASE)
-    if m:
-        dados['horario'] = m.group(1).strip()
-
-    # Expiração
+    if m: dados['horario'] = m.group(1).strip()
     m = re.search(r'Expira[çc][ãa]o:\s*([^\n]+)', texto, re.IGNORECASE)
-    if m:
-        dados['expiracao'] = m.group(1).strip()
-
-    # Direção
+    if m: dados['expiracao'] = m.group(1).strip()
     m = re.search(r'Dire[çc][ãa]o:\s*([^\n]+)', texto, re.IGNORECASE)
     if m:
-        dir_txt = m.group(1).strip().upper()
-        if 'CALL' in dir_txt or '🟢' in dir_txt or 'COMPRA' in dir_txt:
+        d = m.group(1).strip().upper()
+        if 'CALL' in d or '🟢' in d or 'COMPRA' in d:
             dados['direcao'] = 'CALL'
-        elif 'PUT' in dir_txt or '🔴' in dir_txt or 'VENDA' in dir_txt:
+        elif 'PUT' in d or '🔴' in d or 'VENDA' in d:
             dados['direcao'] = 'PUT'
         else:
-            dados['direcao'] = dir_txt
-
-    # Suporte
+            dados['direcao'] = d
     m = re.search(r'Suporte:\s*([^\n]+)', texto, re.IGNORECASE)
-    if m:
-        dados['suporte'] = m.group(1).strip()
-
+    if m: dados['suporte'] = m.group(1).strip()
     if not dados['horario']:
         dados['horario'] = datetime.now().strftime("%H:%M")
-
     return dados
 
 def calcular_assertividade():
-    total = stats['win'] + stats['gale1'] + stats['gale2'] + stats['loss']
+    total = stats['win'] + stats['loss']
     if total == 0:
         return 0.0
-    return round(((stats['win'] + stats['gale1'] + stats['gale2']) / total) * 100, 1)
+    return round((stats['win'] / total) * 100, 1)
 
 def formatar_sinal_quantum(dados):
     emoji_direcao = '🟢' if dados['direcao'] == 'CALL' else '🔴'
     suporte_linha = f"\n🥇 Suporte: {dados['suporte']}" if dados['suporte'] else ""
-
-    mensagem = f"""⚛️ SINAL QUANTUM PRO ⚛️
+    return f"""⚛️ SINAL QUANTUM PRO ⚛️
 
 ⏰ Horário: {dados['horario']}
 💵 Ativo: {dados['ativo']}
@@ -131,33 +132,63 @@ def formatar_sinal_quantum(dados):
 
 ⚠️ Entrar somente no horário marcado.
 🔄 2 recuperação (Gale 2)!"""
-    return mensagem
 
-def formatar_resultado_quantum(texto):
-    resultado = identificar_resultado(texto)
+def classificar_ocr(texto_ocr):
+    """OCR apenas para detectar WIN ou LOSS na imagem."""
+    t = normalizar(texto_ocr)
+    print(f"[OCR NORMALIZADO] {t}")
 
+    tem_loss = 'LOSS' in t or 'LOS' in t
+    tem_win = (
+        'WIN' in t or 'VVIN' in t or 'VIN' in t or
+        re.search(r'\bW\s*I\s*N\b', t) is not None
+    )
+
+    if tem_loss:
+        return 'loss'
+    if tem_win:
+        return 'win'
+    return None
+
+def estimar_por_horario():
+    """
+    Fallback: se o OCR falhou, estima o resultado pelo tempo
+    desde o último sinal enviado.
+    Regra (M1):
+      - até 2 min  -> win (sem gale ou na proteção — opção D conta tudo como win)
+      - mais de 2 min -> loss
+    """
+    global ultimo_sinal_horario, ultimo_sinal_expiracao_min
+
+    if ultimo_sinal_horario is None:
+        return None
+
+    delta = (datetime.now() - ultimo_sinal_horario).total_seconds() / 60
+    limite = ultimo_sinal_expiracao_min * 2  # 2 velas
+
+    if delta <= limite:
+        return 'win'
+    return 'loss'
+
+def formatar_resultado_quantum(resultado, origem_deteccao=""):
     if resultado == 'win':
         stats['win'] += 1
         emoji, status = '✅', 'WIN'
-    elif resultado == 'gale1':
-        stats['gale1'] += 1
-        emoji, status = '✅', 'WIN (Gale 1)'
-    elif resultado == 'gale2':
-        stats['gale2'] += 1
-        emoji, status = '✅', 'WIN (Gale 2)'
     elif resultado == 'loss':
         stats['loss'] += 1
         emoji, status = '❌', 'LOSS'
     else:
-        return texto
+        return None
 
-    return f"""{emoji} {status}
-📊 Placar: 🟢{stats['win']}W 🟡{stats['gale1']}G1 🟠{stats['gale2']}G2 🔴{stats['loss']}L
+    sufixo = f" _(via {origem_deteccao})_" if origem_deteccao else ""
+
+    return f"""{emoji} {status}{sufixo}
+📊 Placar: 🟢{stats['win']}W 🔴{stats['loss']}L
 🎯 Assertividade: {calcular_assertividade()}%"""
 
 async def zerar_placar():
     global stats
-    stats = {'win': 0, 'gale1': 0, 'gale2': 0, 'loss': 0}
+    stats = {'win': 0, 'loss': 0}
     print(f"[{horario()}] 🔄 PLACAR ZERADO - NOVO DIA!")
     try:
         msg = """🔄 PLACAR ZERADO - NOVO DIA!
@@ -177,35 +208,90 @@ async def agendar_zeramento():
 
 @client.on(events.NewMessage(chats=origem))
 async def processar_mensagem(event):
-    texto = event.message.text
-    if not texto:
-        return
+    global ultimo_sinal_horario, ultimo_sinal_expiracao_min
 
-    print(f"[{horario()}] 🔔 Nova mensagem detectada!")
+    texto = obter_texto(event)
+    tem_foto = event.message.photo is not None
 
-    if eh_sinal(texto):
+    print(f"[{horario()}] 🔔 Nova mensagem (foto={tem_foto})")
+
+    # ---- SINAL (texto) ----
+    if texto and eh_sinal(texto):
         dados = extrair_dados_sinal(texto)
-        mensagem_enviar = formatar_sinal_quantum(dados)
+        msg = formatar_sinal_quantum(dados)
+
+        # Guarda o horário do sinal pra estimar resultado depois
+        ultimo_sinal_horario = datetime.now()
+        m = re.search(r'M(\d+)', dados['expiracao'])
+        ultimo_sinal_expiracao_min = int(m.group(1)) if m else 1
+
         print(f"[{horario()}] 📊 SINAL | {dados['ativo']} | {dados['direcao']} | {dados['horario']}")
         try:
-            await client.send_message(destino, mensagem_enviar)
+            await client.send_message(destino, msg)
             print(f"[{horario()}] ✅ Enviado!")
-        except Exception as erro:
-            print(f"[{horario()}] ❌ Erro: {erro}")
+        except Exception as e:
+            print(f"[{horario()}] ❌ Erro: {e}")
         print("=" * 40)
         return
 
-    resultado = identificar_resultado(texto)
-    if resultado:
-        mensagem_enviar = formatar_resultado_quantum(texto)
-        print(f"[{horario()}] 📊 RESULTADO: {resultado.upper()}")
-        try:
-            await client.send_message(destino, mensagem_enviar)
-            print(f"[{horario()}] ✅ Enviado!")
-        except Exception as erro:
-            print(f"[{horario()}] ❌ Erro: {erro}")
+    # ---- FOTO DE RESULTADO ----
+    if tem_foto:
+        resultado = None
+        via = ""
+
+        # 1) Tenta OCR
+        if OCR_OK:
+            print(f"[{horario()}] 🖼️ Foto — rodando OCR...")
+            try:
+                img_bytes = await event.message.download_media(file=bytes)
+                img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
+                arr = np.array(img)
+
+                resultado_ocr = _reader.readtext(arr, detail=0, paragraph=True)
+                texto_ocr = " ".join(resultado_ocr)
+                print(f"[{horario()}] 🔎 OCR bruto: {texto_ocr[:200]}")
+
+                resultado = classificar_ocr(texto_ocr)
+                via = "OCR"
+            except Exception as e:
+                print(f"[{horario()}] ❌ Erro OCR: {e}")
+
+        # 2) Fallback: horário
+        if resultado is None:
+            resultado = estimar_por_horario()
+            via = "horário"
+            print(f"[{horario()}] ⏱️ Fallback por horário: {resultado}")
+
+        if resultado:
+            msg = formatar_resultado_quantum(resultado, via)
+            try:
+                await client.send_message(destino, msg)
+                print(f"[{horario()}] ✅ Resultado enviado: {resultado.upper()} (via {via})")
+                print(f"[{horario()}] 📊 Placar: 🟢{stats['win']}W 🔴{stats['loss']}L")
+            except Exception as e:
+                print(f"[{horario()}] ❌ Erro ao enviar: {e}")
+        else:
+            print(f"[{horario()}] ⚠️ Não foi possível classificar a foto")
         print("=" * 40)
         return
+
+    # ---- RESULTADO POR TEXTO (fallback) ----
+    if texto:
+        t = normalizar(texto)
+        if 'LOSS' in t or '❎' in texto:
+            resultado = 'loss'
+        elif 'WIN' in t:
+            resultado = 'win'
+        else:
+            resultado = None
+
+        if resultado:
+            msg = formatar_resultado_quantum(resultado, "texto")
+            if msg:
+                await client.send_message(destino, msg)
+                print(f"[{horario()}] ✅ Resultado (texto): {resultado.upper()}")
+            print("=" * 40)
+            return
 
     print(f"[{horario()}] 📝 Ignorada")
     print("=" * 40)
@@ -218,6 +304,8 @@ async def main():
     print("✅ Conectado")
     print(f"📡 Origem: {origem}")
     print(f"📡 Destino: {destino}")
+    print("🛡️ WIN NA PROTEÇÃO conta como WIN geral")
+    print("⏱️ Fallback por horário ativado")
     print("⏳ Aguardando...")
     asyncio.create_task(agendar_zeramento())
     await client.run_until_disconnected()
