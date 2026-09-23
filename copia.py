@@ -4,6 +4,7 @@
 📡 Copia sinais + repassa fotos de resultado
 ✅ Fica inativo até enviar o PRIMEIRO sinal
 ✅ Depois disso, repassa TODAS as fotos recebidas
+✅ Foto enviada como FOTO (não como documento/arquivo)
 ❌ SEM OCR / SEM placar / SEM classificação / SEM cálculo de tempo
 """
 
@@ -131,7 +132,7 @@ async def processar_mensagem(event):
         return
 
     # ============================================================
-    # 2) É FOTO? Repassa DIRETO, sem classificar
+    # 2) É FOTO? Repassa DIRETO como FOTO (não como arquivo)
     # ============================================================
     if tem_foto:
         if not bot_ativo:
@@ -139,14 +140,24 @@ async def processar_mensagem(event):
             print("=" * 40)
             return
 
-        print(f"[{horario()}] 🖼️ Foto detectada — repassando...")
+        print(f"[{horario()}] 🖼️ Foto detectada — repassando como FOTO...")
         try:
-            foto_bytes = await event.message.download_media(file=bytes)
-            # Repassa a foto SEM legenda (só a imagem)
-            await client.send_file(destino, foto_bytes)
+            # Opção 1: repassar o media original direto (mais confiável)
+            await client.send_file(
+                destino,
+                event.message.media,
+                force_document=False
+            )
             print(f"[{horario()}] ✅ Foto repassada!")
         except Exception as e:
-            print(f"[{horario()}] ❌ Erro ao repassar foto: {e}")
+            print(f"[{horario()}] ⚠️ Erro no media direto ({e}), tentando via bytes...")
+            try:
+                # Fallback: baixar e reenviar como foto
+                foto_bytes = await event.message.download_media(file=bytes)
+                await client.send_file(destino, foto_bytes, force_document=False)
+                print(f"[{horario()}] ✅ Foto repassada (via bytes)!")
+            except Exception as e2:
+                print(f"[{horario()}] ❌ Erro ao repassar foto: {e2}")
         print("=" * 40)
         return
 
@@ -168,6 +179,7 @@ async def main():
     print(f"📡 Destino: {destino}")
     print("💤 Bot INATIVO — aguardando primeiro sinal...")
     print("🚀 Após o 1º sinal, repassará TODAS as fotos recebidas")
+    print("🖼️ Fotos enviadas como FOTO (não como arquivo)")
     print("❌ SEM placar / SEM classificação / SEM OCR")
     print("⏳ Aguardando...")
     await client.run_until_disconnected()
