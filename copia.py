@@ -2,6 +2,7 @@
 """
 ⚛️ ESPELHO TRADER MAGO - TELEGRAM
 📡 Copia sinais + classifica resultado pelo TEMPO desde o sinal
+✅ Só conta resultado se houver sinal pendente (evita contagem dupla)
 ✅ Opção D: WIN e WIN NA PROTEÇÃO contam como WIN geral
 ✅ Zeramento automático à meia-noite (horário de Brasília)
 ❌ SEM OCR — classificação 100% por tempo
@@ -49,8 +50,9 @@ client = TelegramClient(StringSession(SESSAO_STRING), api_id, api_hash)
 # ==============================
 stats = {'win': 0, 'loss': 0}
 
-ultimo_sinal_horario = None      # datetime do último sinal
+ultimo_sinal_horario = None      # datetime do último sinal enviado
 ultimo_sinal_expiracao_min = 1   # expiração em minutos (M1 = 1)
+aguardando_resultado = False     # True quando tem sinal pendente de resultado
 
 # ==============================
 # FUNÇÕES
@@ -128,7 +130,6 @@ def classificar_por_tempo():
     """
     Classifica o resultado pelo tempo desde o último sinal.
     Regra (M1): <= 2 velas -> WIN | > 2 velas -> LOSS
-    Retorna (resultado, minutos_decorridos)
     """
     global ultimo_sinal_horario, ultimo_sinal_expiracao_min
 
@@ -158,8 +159,9 @@ def formatar_resultado_quantum(resultado, minutos=None):
 🎯 Assertividade: {calcular_assertividade()}%"""
 
 async def zerar_placar():
-    global stats
+    global stats, aguardando_resultado
     stats = {'win': 0, 'loss': 0}
+    aguardando_resultado = False
     print(f"[{horario()}] 🔄 PLACAR ZERADO - NOVO DIA! (horário Brasília)")
     try:
         msg = """🔄 PLACAR ZERADO - NOVO DIA!
@@ -187,7 +189,7 @@ async def agendar_zeramento():
 
 @client.on(events.NewMessage(chats=origem))
 async def processar_mensagem(event):
-    global ultimo_sinal_horario, ultimo_sinal_expiracao_min
+    global ultimo_sinal_horario, ultimo_sinal_expiracao_min, aguardando_resultado
 
     texto = obter_texto(event)
     tem_foto = event.message.photo is not None
@@ -195,16 +197,21 @@ async def processar_mensagem(event):
     print(f"[{horario()}] 🔔 Nova mensagem (foto={tem_foto})")
     print(f"[{horario()}] 📝 Texto: {repr(texto[:200])}")
 
-    # ---- PRIMEIRO: verifica se é SINAL (com ou sem foto) ----
+    # ============================================================
+    # 1) É SINAL? (com ou sem foto)
+    # ============================================================
     if texto and eh_sinal(texto):
         dados = extrair_dados_sinal(texto)
         msg = formatar_sinal_quantum(dados)
 
+        # Marca estado: sinal enviado, aguardando resultado
         ultimo_sinal_horario = datetime.now()
         m = re.search(r'M(\d+)', dados['expiracao'])
         ultimo_sinal_expiracao_min = int(m.group(1)) if m else 1
+        aguardando_resultado = True
 
         print(f"[{horario()}] 📊 SINAL | {dados['ativo']} | {dados['direcao']} | {dados['horario']} | exp={dados['expiracao']}")
+        print(f"[{horario()}] ⏳ Aguardando resultado deste sinal...")
         try:
             await client.send_message(destino, msg)
             print(f"[{horario()}] ✅ Enviado!")
@@ -213,23 +220,36 @@ async def processar_mensagem(event):
         print("=" * 40)
         return
 
-    # ---- DEPOIS: se for foto SEM sinal, trata como resultado ----
+    # ============================================================
+    # 2) CHEGOU FOTO — é a correção do sinal pendente?
+    # ============================================================
     if tem_foto:
+        if not aguardando_resultado:
+            print(f"[{horario()}] ⚠️ Foto recebida mas NÃO há sinal pendente — ignorando")
+            print("=" * 40)
+            return
+
         resultado, minutos = classificar_por_tempo()
         if resultado:
             msg = formatar_resultado_quantum(resultado, minutos)
             try:
                 await client.send_message(destino, msg)
-                print(f"[{horario()}] ✅ Resultado: {resultado.upper()} (em {minutos:.1f} min)")
+                print(f"[{horario()}] ✅ Resultado do sinal: {resultado.upper()} (em {minutos:.1f} min)")
                 print(f"[{horario()}] 📊 Placar: 🟢{stats['win']}W 🔴{stats['loss']}L")
             except Exception as e:
                 print(f"[{horario()}] ❌ Erro: {e}")
+            finally:
+                # Fecha o ciclo: não aceita outra foto até vir novo sinal
+                aguardando_resultado = False
+                print(f"[{horario()}] 🔒 Ciclo fechado. Aguardando próximo sinal...")
         else:
-            print(f"[{horario()}] ⚠️ Sem sinal anterior — ignorando")
+            print(f"[{horario()}] ⚠️ Não foi possível classificar")
         print("=" * 40)
         return
 
-    # ---- RESULTADO POR TEXTO ----
+    # ============================================================
+    # 3) TEXTO de resultado (fallback, ex: "WIN", "LOSS")
+    # ============================================================
     if texto:
         t = normalizar(texto)
         if 'LOSS' in t or '❎' in texto:
@@ -240,10 +260,15 @@ async def processar_mensagem(event):
             resultado = None
 
         if resultado:
+            if not aguardando_resultado:
+                print(f"[{horario()}] ⚠️ Texto de resultado mas sem sinal pendente — ignorando")
+                print("=" * 40)
+                return
             msg = formatar_resultado_quantum(resultado, None)
             if msg:
                 await client.send_message(destino, msg)
                 print(f"[{horario()}] ✅ Resultado (texto): {resultado.upper()}")
+                aguardando_resultado = False
             print("=" * 40)
             return
 
@@ -262,6 +287,7 @@ async def main():
     print(f"📡 Destino: {destino}")
     print("🛡️ WIN NA PROTEÇÃO conta como WIN geral")
     print("⏱️ Classificação 100% por tempo (sem OCR)")
+    print("🔒 Só conta resultado após sinal pendente")
     print("🔄 Zeramento automático à meia-noite (Brasília)")
     print("⏳ Aguardando...")
     asyncio.create_task(agendar_zeramento())
