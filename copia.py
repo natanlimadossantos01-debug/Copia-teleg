@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """
 ⚛️ ESPELHO TRADER MAGO - TELEGRAM
-📡 Copia sinais + classifica resultado pelo TEMPO desde o sinal
-✅ Só conta resultado se houver sinal pendente (evita contagem dupla)
-✅ Opção D: WIN e WIN NA PROTEÇÃO contam como WIN geral
-✅ Zeramento automático à meia-noite (horário de Brasília)
-❌ SEM OCR — classificação 100% por tempo
-❌ SEM campo Suporte no sinal enviado
+📡 Copia sinais + repassa fotos de resultado
+✅ Fica inativo até enviar o PRIMEIRO sinal
+✅ Depois disso, repassa TODAS as fotos recebidas
+❌ SEM OCR / SEM placar / SEM classificação / SEM cálculo de tempo
 """
 
 # ==============================
@@ -22,11 +20,10 @@ except Exception:
 
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
-from datetime import datetime, timedelta
+from datetime import datetime
 import re
 import asyncio
 import sys
-import unicodedata
 
 # ==============================
 # CONFIGURAÇÕES
@@ -40,19 +37,14 @@ destino = int(os.environ.get('CANAL_DESTINO', '-1004483690234'))
 
 if not SESSAO_STRING:
     print("❌ ERRO: Variável SESSAO_STRING não definida!")
-    print("   Configure a string de sessão no Railway.")
     sys.exit(1)
 
 client = TelegramClient(StringSession(SESSAO_STRING), api_id, api_hash)
 
 # ==============================
-# ESTATÍSTICAS
+# ESTADO
 # ==============================
-stats = {'win': 0, 'loss': 0}
-
-ultimo_sinal_horario = None      # datetime do último sinal enviado
-ultimo_sinal_expiracao_min = 1   # expiração em minutos (M1 = 1)
-aguardando_resultado = False     # True quando tem sinal pendente de resultado
+bot_ativo = False   # Vira True após enviar o primeiro sinal
 
 # ==============================
 # FUNÇÕES
@@ -65,17 +57,7 @@ def obter_texto(event):
     msg = event.message
     return msg.message or msg.text or ""
 
-def normalizar(txt):
-    txt = txt.upper()
-    txt = unicodedata.normalize('NFKD', txt)
-    txt = ''.join(c for c in txt if not unicodedata.combining(c))
-    txt = txt.replace('0', 'O').replace('1', 'I').replace('5', 'S')
-    txt = re.sub(r'[^A-Z ]+', ' ', txt)
-    txt = re.sub(r'\s+', ' ', txt).strip()
-    return txt
-
 def eh_sinal(texto):
-    """Versão simplificada — só exige 'ativo:' e 'horário:'/'horario:'."""
     t = texto.lower()
     tem_ativo = 'ativo:' in t
     tem_horario = 'horário:' in t or 'horario:' in t
@@ -107,14 +89,7 @@ def extrair_dados_sinal(texto):
         dados['horario'] = datetime.now().strftime("%H:%M")
     return dados
 
-def calcular_assertividade():
-    total = stats['win'] + stats['loss']
-    if total == 0:
-        return 0.0
-    return round((stats['win'] / total) * 100, 1)
-
-def formatar_sinal_quantum(dados):
-    """SEM campo Suporte."""
+def formatar_sinal(dados):
     emoji_direcao = '🟢' if dados['direcao'] == 'CALL' else '🔴'
     return f"""⚛️ SINAL TRADER MAGO ⚛️
 
@@ -126,152 +101,58 @@ def formatar_sinal_quantum(dados):
 ⚠️ Entrar somente no horário marcado.
 🔄 2 recuperação (Gale 2)!"""
 
-def classificar_por_tempo():
-    """
-    Classifica o resultado pelo tempo desde o último sinal.
-    Regra (M1): <= 2 velas -> WIN | > 2 velas -> LOSS
-    """
-    global ultimo_sinal_horario, ultimo_sinal_expiracao_min
-
-    if ultimo_sinal_horario is None:
-        return None, None
-
-    delta_min = (datetime.now() - ultimo_sinal_horario).total_seconds() / 60
-    limite = ultimo_sinal_expiracao_min * 2
-
-    resultado = 'win' if delta_min <= limite else 'loss'
-    return resultado, delta_min
-
-def formatar_resultado_quantum(resultado, minutos=None):
-    if resultado == 'win':
-        stats['win'] += 1
-        emoji, status = '✅', 'WIN'
-    elif resultado == 'loss':
-        stats['loss'] += 1
-        emoji, status = '❌', 'LOSS'
-    else:
-        return None
-
-    detalhe = f" _(em {minutos:.1f} min)_" if minutos is not None else ""
-
-    return f"""{emoji} {status}{detalhe}
-📊 Placar: 🟢{stats['win']}W 🔴{stats['loss']}L
-🎯 Assertividade: {calcular_assertividade()}%"""
-
-async def zerar_placar():
-    global stats, aguardando_resultado
-    stats = {'win': 0, 'loss': 0}
-    aguardando_resultado = False
-    print(f"[{horario()}] 🔄 PLACAR ZERADO - NOVO DIA! (horário Brasília)")
-    try:
-        msg = """🔄 PLACAR ZERADO - NOVO DIA!
-📊 Estatísticas reiniciadas à meia-noite.
-
-⚛️ TRADER MAGO PRONTO PARA OPERAR! ⚛️"""
-        await client.send_message(destino, msg)
-        print(f"[{horario()}] ✅ Mensagem de zeramento enviada!")
-    except Exception as e:
-        print(f"[{horario()}] ❌ Erro ao enviar zeramento: {e}")
-
-async def agendar_zeramento():
-    """Agenda o zeramento pra meia-noite EXATA do horário de Brasília."""
-    while True:
-        agora = datetime.now()
-        meia_noite = agora.replace(hour=0, minute=0, second=0, microsecond=0)
-        if agora >= meia_noite:
-            meia_noite = meia_noite + timedelta(days=1)
-
-        espera = (meia_noite - agora).total_seconds()
-        print(f"[{horario()}] ⏰ Próximo zeramento em {espera/3600:.2f}h (às 00:00 Brasília)")
-
-        await asyncio.sleep(espera)
-        await zerar_placar()
-
 @client.on(events.NewMessage(chats=origem))
 async def processar_mensagem(event):
-    global ultimo_sinal_horario, ultimo_sinal_expiracao_min, aguardando_resultado
+    global bot_ativo
 
     texto = obter_texto(event)
     tem_foto = event.message.photo is not None
 
-    print(f"[{horario()}] 🔔 Nova mensagem (foto={tem_foto})")
-    print(f"[{horario()}] 📝 Texto: {repr(texto[:200])}")
+    print(f"[{horario()}] 🔔 Nova mensagem (foto={tem_foto}) | bot_ativo={bot_ativo}")
 
     # ============================================================
-    # 1) É SINAL? (com ou sem foto)
+    # 1) É SINAL?
     # ============================================================
     if texto and eh_sinal(texto):
         dados = extrair_dados_sinal(texto)
-        msg = formatar_sinal_quantum(dados)
+        msg = formatar_sinal(dados)
 
-        # Marca estado: sinal enviado, aguardando resultado
-        ultimo_sinal_horario = datetime.now()
-        m = re.search(r'M(\d+)', dados['expiracao'])
-        ultimo_sinal_expiracao_min = int(m.group(1)) if m else 1
-        aguardando_resultado = True
+        if not bot_ativo:
+            print(f"[{horario()}] 🚀 PRIMEIRO SINAL — ativando bot!")
 
-        print(f"[{horario()}] 📊 SINAL | {dados['ativo']} | {dados['direcao']} | {dados['horario']} | exp={dados['expiracao']}")
-        print(f"[{horario()}] ⏳ Aguardando resultado deste sinal...")
+        print(f"[{horario()}] 📊 SINAL | {dados['ativo']} | {dados['direcao']} | {dados['horario']}")
         try:
             await client.send_message(destino, msg)
-            print(f"[{horario()}] ✅ Enviado!")
+            bot_ativo = True
+            print(f"[{horario()}] ✅ Enviado! Bot ATIVO a partir de agora.")
         except Exception as e:
             print(f"[{horario()}] ❌ Erro: {e}")
         print("=" * 40)
         return
 
     # ============================================================
-    # 2) CHEGOU FOTO — é a correção do sinal pendente?
+    # 2) É FOTO? Repassa DIRETO, sem classificar
     # ============================================================
     if tem_foto:
-        if not aguardando_resultado:
-            print(f"[{horario()}] ⚠️ Foto recebida mas NÃO há sinal pendente — ignorando")
+        if not bot_ativo:
+            print(f"[{horario()}] 💤 Bot inativo — foto ignorada (aguardando 1º sinal)")
             print("=" * 40)
             return
 
-        resultado, minutos = classificar_por_tempo()
-        if resultado:
-            msg = formatar_resultado_quantum(resultado, minutos)
-            try:
-                await client.send_message(destino, msg)
-                print(f"[{horario()}] ✅ Resultado do sinal: {resultado.upper()} (em {minutos:.1f} min)")
-                print(f"[{horario()}] 📊 Placar: 🟢{stats['win']}W 🔴{stats['loss']}L")
-            except Exception as e:
-                print(f"[{horario()}] ❌ Erro: {e}")
-            finally:
-                # Fecha o ciclo: não aceita outra foto até vir novo sinal
-                aguardando_resultado = False
-                print(f"[{horario()}] 🔒 Ciclo fechado. Aguardando próximo sinal...")
-        else:
-            print(f"[{horario()}] ⚠️ Não foi possível classificar")
+        print(f"[{horario()}] 🖼️ Foto detectada — repassando...")
+        try:
+            foto_bytes = await event.message.download_media(file=bytes)
+            # Repassa a foto SEM legenda (só a imagem)
+            await client.send_file(destino, foto_bytes)
+            print(f"[{horario()}] ✅ Foto repassada!")
+        except Exception as e:
+            print(f"[{horario()}] ❌ Erro ao repassar foto: {e}")
         print("=" * 40)
         return
 
     # ============================================================
-    # 3) TEXTO de resultado (fallback, ex: "WIN", "LOSS")
+    # 3) Qualquer outro texto — ignora
     # ============================================================
-    if texto:
-        t = normalizar(texto)
-        if 'LOSS' in t or '❎' in texto:
-            resultado = 'loss'
-        elif 'WIN' in t:
-            resultado = 'win'
-        else:
-            resultado = None
-
-        if resultado:
-            if not aguardando_resultado:
-                print(f"[{horario()}] ⚠️ Texto de resultado mas sem sinal pendente — ignorando")
-                print("=" * 40)
-                return
-            msg = formatar_resultado_quantum(resultado, None)
-            if msg:
-                await client.send_message(destino, msg)
-                print(f"[{horario()}] ✅ Resultado (texto): {resultado.upper()}")
-                aguardando_resultado = False
-            print("=" * 40)
-            return
-
     print(f"[{horario()}] 📝 Ignorada")
     print("=" * 40)
 
@@ -285,12 +166,10 @@ async def main():
     print("✅ Conectado")
     print(f"📡 Origem: {origem}")
     print(f"📡 Destino: {destino}")
-    print("🛡️ WIN NA PROTEÇÃO conta como WIN geral")
-    print("⏱️ Classificação 100% por tempo (sem OCR)")
-    print("🔒 Só conta resultado após sinal pendente")
-    print("🔄 Zeramento automático à meia-noite (Brasília)")
+    print("💤 Bot INATIVO — aguardando primeiro sinal...")
+    print("🚀 Após o 1º sinal, repassará TODAS as fotos recebidas")
+    print("❌ SEM placar / SEM classificação / SEM OCR")
     print("⏳ Aguardando...")
-    asyncio.create_task(agendar_zeramento())
     await client.run_until_disconnected()
 
 if __name__ == "__main__":
